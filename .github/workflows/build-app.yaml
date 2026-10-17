@@ -32,6 +32,21 @@ jobs:
   test:
     needs: build
     runs-on: ubuntu-latest
+    # Levantamos una base de datos PostgreSQL temporal para las pruebas
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: ecommerce
+          POSTGRES_USER: store
+          POSTGRES_PASSWORD: 123456
+        ports:
+          - 5434:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - name: Checkout del código
         uses: actions/checkout@v4
@@ -48,7 +63,6 @@ jobs:
 
       - name: Ejecutar pruebas
         env:
-          
           SPRING_DATASOURCE_URL: ${{ secrets.SPRING_DATASOURCE_URL }}
           SPRING_DATASOURCE_USERNAME: ${{ secrets.SPRING_DATASOURCE_USERNAME }}
           SPRING_DATASOURCE_PASSWORD: ${{ secrets.SPRING_DATASOURCE_PASSWORD }}
