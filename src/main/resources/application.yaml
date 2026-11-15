@@ -18,7 +18,3 @@ springdoc:
     path: /api/v1/api-docs
   swagger-ui:
     path: /api/v1/api-docs
-server:
-  port: ${PORT:8080}
-app:
-  version: 1.0.1
