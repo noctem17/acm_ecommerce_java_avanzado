@@ -1,0 +1,43 @@
+name: CD
+
+# CD: se ejecuta automaticamente cuando el pipeline de CI termina con exito
+# en main. Despliega en Render la imagen exacta que CI publico en GHCR
+# y verifica que la aplicacion publica ya este corriendo esa version.
+on:
+  workflow_run:
+    workflows: [ "CI" ]
+    types: [ completed ]
+    branches: [ "main" ]
+
+jobs:
+  deploy:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    env:
+      IMAGE: ghcr.io/${{ github.repository_owner }}/acm-ecommerce:${{ github.event.workflow_run.head_sha }}
+      COMMIT: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - name: Desplegar imagen en Render
+        env:
+          RENDER_DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
+        run: |
+          IMAGE_ENCODED=$(jq -rn --arg v "$IMAGE" '$v|@uri')
+          echo "Desplegando $IMAGE"
+          curl -fsS -X POST "$RENDER_DEPLOY_HOOK&imgURL=$IMAGE_ENCODED"
+
+      - name: Verificar despliegue en la URL pública
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+        run: |
+          echo "Esperando a que $APP_URL responda con el commit $COMMIT ..."
+          for i in $(seq 1 40); do
+            RESPONSE=$(curl -s "$APP_URL/api/v1/version" || true)
+            echo "Intento $i: $RESPONSE"
+            if echo "$RESPONSE" | grep -q "$COMMIT"; then
+              echo "Despliegue verificado"
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "La aplicación no respondió con la nueva versión a tiempo"
+          exit 1
