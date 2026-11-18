@@ -75,17 +75,21 @@ jobs:
     # Se sube la imagen al registro de github
       - name: Publicar imagen en GHCR
         run: docker push "${{ steps.vars.outputs.image }}"
-
+# Tarea que despliega la imagen en el registry en Render
   deploy:
-    needs: build-and-push
-    runs-on: ubuntu-latest
+    needs: build-and-push # Se ejecuta luego de crear y subir la imagen
+    runs-on: ubuntu-latest # Corre en una maquina virtual con Ubuntu
+    # Define variables de entorno que se usan en los pasos del job
     env:
-      IMAGE: ${{ needs.build-and-push.outputs.image }}
-      COMMIT: ${{ github.sha }}
+      IMAGE: ${{ needs.build-and-push.outputs.image }} # El nombre de la imagen
+      COMMIT: ${{ github.sha }} # El commit que se va a desplegar para el versionamiento
     steps:
+    # Este paso hace el despliegue de la imagen en render
       - name: Desplegar imagen en Render
-        env:
+        env: # Define variables de entorno para este paso
           RENDER_DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
+          # A la variable le asigna el valor del secreto en github
+          # El secreto es una URL que identifica el servicio en render a desplegar
         run: |
           IMAGE_ENCODED=$(jq -rn --arg v "$IMAGE" '$v|@uri')
           echo "Desplegando $IMAGE"
@@ -93,7 +97,7 @@ jobs:
 
       - name: Verificar despliegue en la URL pública
         env:
-          APP_URL: ${{ vars.APP_URL }}
+          APP_URL: ${{ vars.APP_URL }} # La URL publica del servicio desplegado
         run: |
           echo "Esperando a que $APP_URL responda con el commit $COMMIT ..."
           for i in $(seq 1 40); do
