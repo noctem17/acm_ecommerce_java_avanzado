@@ -1,5 +1,5 @@
 #Nombre del workflow que se va a ejecutar "Despliegue Continuo"
-name: CD
+name: CD Pipeline
 
 # Disparadores del workflow 
 on:
@@ -29,7 +29,7 @@ jobs:
       # Trae el codigo fuente que se va a compilar para el jar desde el repositorio
       - name: Checkout del código 
         uses: actions/checkout@v4
-      # Congigurar la maquina virtual donde se va a compilar el jar
+      # Configurar la maquina virtual donde se va a compilar el jar
       - name: Configurar Java y Caché
         uses: actions/setup-java@v4 
         with:
@@ -44,30 +44,35 @@ jobs:
         # a gradle
       - name: Dar permisos de ejecución a Gradle
         run: chmod +x ./gradlew
-
+        # Compilar y generar el ejecutable del proyecto
       - name: Construir el archivo JAR
         run: ./gradlew build -x test
 
+        # Definir el nombre de la imagen docker que se va a subir al registro 
+        # de github en una variable que pueda leer la siguiente tarea (despliegue)
+        # Aqui se construye el nombre de la imagen
       - name: Definir nombre de la imagen
         id: vars
-        run: |
+        run: | 
           OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
           echo "image=ghcr.io/${OWNER}/acm-ecommerce:${{ github.sha }}" >> "$GITHUB_OUTPUT"
 
+      # Se inicia sesion en el registro 
       - name: Iniciar sesión en GitHub Container Registry
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
     
+    # Construir la imagen de docker con el nombre que se creo antes
       - name: Construir imagen de Docker
         run: |
           docker build \
             --build-arg GIT_COMMIT=${{ github.sha }} \
             -t "${{ steps.vars.outputs.image }}" .
 
+    # Se sube la imagen al registro de github
       - name: Publicar imagen en GHCR
         run: docker push "${{ steps.vars.outputs.image }}"
 
