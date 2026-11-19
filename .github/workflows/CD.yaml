@@ -1,0 +1,62 @@
+# Nombre del workflow "Despliegue Continuo"
+name: CD
+
+# Disparador: se ejecuta automáticamente cuando el workflow "CI" termina en main.
+# No construye nada: despliega en Render la imagen exacta que CI probó, escaneó
+# y publicó en GHCR, y verifica que la URL pública ya corre esa versión.
+# NOTA: workflow_run solo funciona cuando este archivo ya está en la rama main.
+on:
+  workflow_run:
+    workflows: [ "CI" ]
+    types: [ completed ]
+    branches: [ "main" ]
+
+# Permisos mínimos: el CD no publica paquetes, solo dispara el despliegue
+permissions:
+  contents: read
+
+# Evita dos despliegues a producción al mismo tiempo (se encolan, no se cancelan)
+concurrency:
+  group: cd-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # Solo despliega si CI terminó con éxito y fue por un push a main (no por un PR)
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    # El despliegue queda registrado en "Deployments" del repositorio con el link a la app
+    environment:
+      name: production
+      url: ${{ vars.APP_URL }}
+    env:
+      IMAGE: ghcr.io/${{ github.repository_owner }}/acm-ecommerce:${{ github.event.workflow_run.head_sha }}
+      COMMIT: ${{ github.event.workflow_run.head_sha }}
+    steps:
+    # Este paso hace el despliegue de la imagen en render
+      - name: Desplegar imagen en Render
+        env: # Define variables de entorno para este paso
+          RENDER_DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
+          # A la variable le asigna el valor del secreto en github
+          # El secreto es una URL que identifica el servicio en render a desplegar
+        run: |
+          IMAGE_ENCODED=$(jq -rn --arg v "$IMAGE" '$v|@uri')
+          echo "Desplegando $IMAGE"
+          curl -fsS -X POST "$RENDER_DEPLOY_HOOK&imgURL=$IMAGE_ENCODED"
+
+      - name: Verificar despliegue en la URL pública
+        env:
+          APP_URL: ${{ vars.APP_URL }} # La URL publica del servicio desplegado
+        run: |
+          echo "Esperando a que $APP_URL responda con el commit $COMMIT ..."
+          for i in $(seq 1 40); do
+            RESPONSE=$(curl -s "$APP_URL/api/v1/version" || true)
+            echo "Intento $i: $RESPONSE"
+            if echo "$RESPONSE" | grep -q "$COMMIT"; then
+              echo "Despliegue verificado"
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "La aplicación no respondió con la nueva versión a tiempo"
+          exit 1
