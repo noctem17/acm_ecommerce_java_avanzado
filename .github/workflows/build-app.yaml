@@ -1,13 +1,22 @@
-name: CI Pipeline
+# CI: compila, prueba, analiza seguridad y publica la imagen Docker en GHCR.
+# - pull_request a main: build -> test -> CodeQL (no publica imagen)
+# - push a main:         build -> test -> CodeQL -> docker (Trivy + push a GHCR)
+# IMPORTANTE: el nombre "CI" debe coincidir con workflows: ["CI"] en CD.yaml
+name: CI
 
 on:
+  push:
+    branches: [ "main" ]
   pull_request:
-    branches: [ "main", "master" ]
+    branches: [ "main" ]
 
 permissions:
   contents: read
   packages: write
   security-events: write
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/acm-ecommerce
 
 jobs:
   build:
@@ -19,7 +28,7 @@ jobs:
       - name: Configurar Java y Caché
         uses: actions/setup-java@v4
         with:
-          java-version: '17' 
+          java-version: '25'
           distribution: 'temurin'
           cache: 'gradle'
 
@@ -27,12 +36,12 @@ jobs:
         run: chmod +x ./gradlew
 
       - name: Compilar el proyecto
-        run: ./gradlew classes
+        run: ./gradlew classes --no-daemon
 
   test:
     needs: build
     runs-on: ubuntu-latest
-    # Levantamos una base de datos PostgreSQL temporal para las pruebas
+    # Base de datos PostgreSQL temporal para las pruebas (coincide con application.yaml)
     services:
       postgres:
         image: postgres:15
@@ -54,7 +63,7 @@ jobs:
       - name: Configurar Java
         uses: actions/setup-java@v4
         with:
-          java-version: '17'
+          java-version: '25'
           distribution: 'temurin'
           cache: 'gradle'
 
@@ -62,11 +71,7 @@ jobs:
         run: chmod +x ./gradlew
 
       - name: Ejecutar pruebas
-        env:
-          SPRING_DATASOURCE_URL: ${{ secrets.SPRING_DATASOURCE_URL }}
-          SPRING_DATASOURCE_USERNAME: ${{ secrets.SPRING_DATASOURCE_USERNAME }}
-          SPRING_DATASOURCE_PASSWORD: ${{ secrets.SPRING_DATASOURCE_PASSWORD }}
-        run: ./gradlew test
+        run: ./gradlew test --no-daemon
 
   security-codeql:
     needs: test
@@ -74,27 +79,38 @@ jobs:
     steps:
       - name: Checkout del código
         uses: actions/checkout@v4
+
+      - name: Configurar Java
+        uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+          cache: 'gradle'
+
       - name: Inicializar CodeQL
         uses: github/codeql-action/init@v3
         with:
           languages: java
+
       - name: Construir para CodeQL
         uses: github/codeql-action/autobuild@v3
+
       - name: Analizar vulnerabilidades
         uses: github/codeql-action/analyze@v3
 
   docker:
+    # Solo se publica imagen cuando el código ya está integrado en main
+    if: github.event_name == 'push'
     needs: security-codeql
     runs-on: ubuntu-latest
     steps:
       - name: Checkout del código
         uses: actions/checkout@v4
 
-      # --- NUEVOS PASOS PARA GENERAR EL JAR ---
       - name: Configurar Java
         uses: actions/setup-java@v4
         with:
-          java-version: '17'
+          java-version: '25'
           distribution: 'temurin'
           cache: 'gradle'
 
@@ -102,12 +118,7 @@ jobs:
         run: chmod +x ./gradlew
 
       - name: Construir el archivo JAR
-        run: ./gradlew build -x test
-      # ----------------------------------------
-
-      - name: Obtener Short SHA para el etiquetado semántico
-        id: vars
-        run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+        run: ./gradlew bootJar --no-daemon
 
       - name: Iniciar sesión en GitHub Container Registry
         uses: docker/login-action@v3
@@ -116,14 +127,18 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # La imagen se etiqueta con el SHA completo del commit (inmutable, lo usa el CD) y con latest
       - name: Construir imagen de Docker
         run: |
-          docker build -t ghcr.io/${{ github.repository_owner }}/acm-ecommerce:${{ env.sha_short }} -t ghcr.io/${{ github.repository_owner }}/acm-ecommerce:latest .
+          docker build \
+            --build-arg APP_COMMIT=${{ github.sha }} \
+            -t $IMAGE_NAME:${{ github.sha }} \
+            -t $IMAGE_NAME:latest .
 
       - name: Escanear imagen con Trivy
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: 'ghcr.io/${{ github.repository_owner }}/acm-ecommerce:${{ env.sha_short }}'
+          image-ref: '${{ env.IMAGE_NAME }}:${{ github.sha }}'
           format: 'sarif'
           output: 'trivy-results.sarif'
           severity: 'CRITICAL,HIGH'
@@ -136,5 +151,5 @@ jobs:
 
       - name: Publicar imagen de Docker en GHCR
         run: |
-          docker push ghcr.io/${{ github.repository_owner }}/acm-ecommerce:${{ env.sha_short }}
-          docker push ghcr.io/${{ github.repository_owner }}/acm-ecommerce:latest
+          docker push $IMAGE_NAME:${{ github.sha }}
+          docker push $IMAGE_NAME:latest

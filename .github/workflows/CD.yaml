@@ -1,82 +1,37 @@
-#Nombre del workflow que se va a ejecutar "Despliegue Continuo"
+# Nombre del workflow "Despliegue Continuo"
 name: CD
 
-# Disparadores del workflow 
+# Disparador: se ejecuta automáticamente cuando el workflow "CI" termina en main.
+# No construye nada: despliega en Render la imagen exacta que CI probó, escaneó
+# y publicó en GHCR, y verifica que la URL pública ya corre esa versión.
+# NOTA: workflow_run solo funciona cuando este archivo ya está en la rama main.
 on:
-  push:
-    branches: [ "main" ] # Cuando se haga push a la rama main
+  workflow_run:
+    workflows: [ "CI" ]
+    types: [ completed ]
+    branches: [ "main" ]
 
-# Persmisos que necesita el worflow para ejecutar los jobs
+# Permisos mínimos: el CD no publica paquetes, solo dispara el despliegue
 permissions:
   contents: read
-  packages: write  
 
+# Evita dos despliegues a producción al mismo tiempo (se encolan, no se cancelan)
 concurrency:
   group: cd-production
   cancel-in-progress: false
 
-# Tareas que se ejecutan en el workflow
 jobs:
-  #Construir el jar y la imagen de docker para subirla al registro de github
-  build-and-push:
-    # Corre en una maquina virtual de Ubuntu
-    runs-on: ubuntu-latest
-    # La salida del job se llama imagen y el nombre de esta va a a ser el valor de una variable
-    outputs:
-      image: ${{ steps.vars.outputs.image }}
-    # Pasos para realizar el job 
-    steps:
-      # Trae el codigo fuente que se va a compilar para el jar desde el repositorio
-      - name: Checkout del código 
-        uses: actions/checkout@v4
-      # Congigurar la maquina virtual donde se va a compilar el jar
-      - name: Configurar Java y Caché
-        uses: actions/setup-java@v4 
-        with:
-        # La VM va a usar java 17 y la distribución de java de temurin
-          java-version: '17'
-          distribution: 'temurin'
-          cache: 'gradle' # En cache guarda las dependencias que gradle descarga
-          # Esto para restaurar desde la cache las dependencias y no ir a buscarlas 
-          # Y descargarlas siempre
-        
-        # Ejecuta el comando de consola para darle permisos de ejecución 
-        # a gradle
-      - name: Dar permisos de ejecución a Gradle
-        run: chmod +x ./gradlew
-
-      - name: Construir el archivo JAR
-        run: ./gradlew build -x test
-
-      - name: Definir nombre de la imagen
-        id: vars
-        run: |
-          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-          echo "image=ghcr.io/${OWNER}/acm-ecommerce:${{ github.sha }}" >> "$GITHUB_OUTPUT"
-
-      - name: Iniciar sesión en GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-    
-      - name: Construir imagen de Docker
-        run: |
-          docker build \
-            --build-arg GIT_COMMIT=${{ github.sha }} \
-            -t "${{ steps.vars.outputs.image }}" .
-
-      - name: Publicar imagen en GHCR
-        run: docker push "${{ steps.vars.outputs.image }}"
-
   deploy:
-    needs: build-and-push
+    # Solo despliega si CI terminó con éxito y fue por un push a main (no por un PR)
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
     runs-on: ubuntu-latest
+    # El despliegue queda registrado en "Deployments" del repositorio con el link a la app
+    environment:
+      name: production
+      url: ${{ vars.APP_URL }}
     env:
-      IMAGE: ${{ needs.build-and-push.outputs.image }}
-      COMMIT: ${{ github.sha }}
+      IMAGE: ghcr.io/${{ github.repository_owner }}/acm-ecommerce:${{ github.event.workflow_run.head_sha }}
+      COMMIT: ${{ github.event.workflow_run.head_sha }}
     steps:
       - name: Desplegar imagen en Render
         env:
