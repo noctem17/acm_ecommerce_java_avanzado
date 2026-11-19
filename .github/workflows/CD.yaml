@@ -33,9 +33,12 @@ jobs:
       IMAGE: ghcr.io/${{ github.repository_owner }}/acm-ecommerce:${{ github.event.workflow_run.head_sha }}
       COMMIT: ${{ github.event.workflow_run.head_sha }}
     steps:
+    # Este paso hace el despliegue de la imagen en render
       - name: Desplegar imagen en Render
-        env:
+        env: # Define variables de entorno para este paso
           RENDER_DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
+          # A la variable le asigna el valor del secreto en github
+          # El secreto es una URL que identifica el servicio en render a desplegar
         run: |
           IMAGE_ENCODED=$(jq -rn --arg v "$IMAGE" '$v|@uri')
           echo "Desplegando $IMAGE"
@@ -43,7 +46,7 @@ jobs:
 
       - name: Verificar despliegue en la URL pública
         env:
-          APP_URL: ${{ vars.APP_URL }}
+          APP_URL: ${{ vars.APP_URL }} # La URL publica del servicio desplegado
         run: |
           echo "Esperando a que $APP_URL responda con el commit $COMMIT ..."
           for i in $(seq 1 40); do
